@@ -132,7 +132,7 @@ def encurtar_link_xgd(url, api_key, tentativas=3):
 
 # === FORMATAÇÃO COM GEMINI ===
 def formatar_boletim(texto_encurtado, num_edicao, mes_ano, api_key):
-    client = genai.Client(api_key=api_key)
+    client = genai.Client(api_key=api_key, http_options={"timeout": 45000})
 
     prompt = f"""Você é o editor técnico do "Boletim Semanal do Contrapoder".
 Receba o texto abaixo (já com os links encurtados) e devolva EXATAMENTE duas versões separadas pela marcação "===SEPARADOR_SUBSTACK===". Não escreva nenhuma introdução ou comentário fora das versões.
