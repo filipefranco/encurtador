@@ -2,13 +2,16 @@ import re
 import time
 import requests
 import streamlit as st
+from google import genai
 from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
 
-st.set_page_config(page_title="Encurtador de Links", page_icon="🔗", layout="centered")
+st.set_page_config(page_title="Editor Contrapoder", page_icon="🗞️", layout="centered")
 
-# Puxa a chave de forma segura das configurações do servidor (Secrets)
+# Chaves configuradas nos Secrets do Streamlit
 XGD_API_KEY = st.secrets.get("XGD_API_KEY", "")
+GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
 
+# === FUNÇÕES DE ENCURTAMENTO E DETECÇÃO ===
 def limpar_url_para_encurtar(url):
     try:
         parsed = urlparse(url)
@@ -127,53 +130,142 @@ def encurtar_link_xgd(url, api_key, tentativas=3):
                 time.sleep(3)
     return url
 
+# === FORMATAÇÃO COM GEMINI ===
+def formatar_boletim(texto_encurtado, num_edicao, mes_ano, api_key):
+    client = genai.Client(api_key=api_key)
+
+    prompt = f"""Você é o editor técnico do "Boletim Semanal do Contrapoder".
+Receba o texto abaixo (já com os links encurtados) e devolva EXATAMENTE duas versões separadas pela marcação "===SEPARADOR_SUBSTACK===". Não escreva nenhuma introdução ou comentário fora das versões.
+
+REGRAS GERAIS:
+1. Remova as letras de enumeração (a), b), c)...) das manchetes.
+2. Adicione emojis temáticos adequados antes de cada manchete. Em protestos, greves ou marchas, use o punho ✊ (seguido da bandeira do país, quando aplicável).
+3. Na seção Nacional, NÃO coloque a bandeira do Brasil (🇧🇷) nas chamadas individuais (pois a bandeira já está no título da seção).
+4. Mantenha os links exatamente como estão no texto recebido, incluindo as atribuições entre parênteses.
+5. Qualquer texto/artigo do site contrapoder.net (identificado por "(contrapoder)") deve ser REMOVIDO da seção "Leituras" e colocado EXCLUSIVAMENTE no bloco final "🚫 CONTRAPODER:".
+
+---
+VERSÃO 1: WHATSAPP (texto puro com formatação de negrito do WhatsApp usando *asteriscos*)
+- Cabeçalho obrigatório:
+*Boletim Semanal do Contrapoder*
+*número {num_edicao}*
+{mes_ano}
+
+📢 *Se preferir receber por email, assine nossa newsletter:*
+https://contrapoder.substack.com/p/{num_edicao}-boletim-semanal-do-contrapoder
+
+- Títulos das seções: 🌍 *Internacional*, 🇧🇷 *Nacional*, 🌳 *Colapso ambiental*, 🩸 *Barbárie*, 📖 *Leituras*.
+- Manchetes em *negrito* com os links logo na linha abaixo (sem linha em branco entre a manchete e o primeiro link).
+- Bloco final (se houver textos do contrapoder):
+---
+🚫 CONTRAPODER:
+Leia nossos artigos de destaque diretamente no site:
+
+👉 *Autor, "Título"*
+link (contrapoder)
+
+- Rodapé obrigatório:
+💰 Apoie o Contrapoder:
+pix para 11951771614 (celular editor)
+
+===SEPARADOR_SUBSTACK===
+
+VERSÃO 2: SUBSTACK (Markdown rico)
+- NÃO coloque cabeçalho. Comece diretamente em: ### 🌍 **Internacional**
+- Títulos das seções: ### 🌍 **Internacional**, ### 🇧🇷 **Nacional**, ### 🌳 **Colapso ambiental**, ### 🩸 **Barbárie**, ### 📖 **Leituras**.
+- Manchetes em **negrito**. Pule UMA linha simples após a manchete antes de listar os links.
+- Formate cada link em Markdown clicável: [url](url) (fonte) — um link por linha.
+- Bloco final (se houver textos do contrapoder):
+---
+### 🚫 **CONTRAPODER:**
+Leia nossos artigos de destaque diretamente no site:
+
+👉 **Autor, "Título"**
+[url](url) (contrapoder)
+
+- Rodapé obrigatório (apenas isso):
+📲 Participe do nosso canal do Whatsapp e receba o conteúdo em primeira mão!
+[https://whatsapp.com/channel/0029Vb8JyLPD8SDrxKt3p42j](https://whatsapp.com/channel/0029Vb8JyLPD8SDrxKt3p42j)
+
+---
+TEXTO DO BOLETIM PARA FORMATAR:
+{texto_encurtado}
+"""
+
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt,
+    )
+    return response.text
+
 # === INTERFACE WEB ===
-st.title("🔗 Encurtador de Links")
-st.caption("Encurta links via x.gd, limpa rastreadores e identifica canais do YouTube e perfis do Instagram.")
+st.title("🗞️ Editor do Boletim Contrapoder")
+st.caption("Encurta links (x.gd), identifica canais/perfis e formata automaticamente para WhatsApp e Substack.")
+
+col1, col2 = st.columns(2)
+with col1:
+    num_edicao = st.text_input("Número da edição:", value="145")
+with col2:
+    mes_ano = st.text_input("Mês e Ano:", value="Novembro de 2026")
 
 if not XGD_API_KEY:
-    st.warning("Chave `XGD_API_KEY` não configurada nos Secrets do servidor.")
-    XGD_API_KEY = st.text_input("Insira sua chave da API x.gd:", type="password")
+    XGD_API_KEY = st.text_input("Chave da API x.gd:", type="password")
+if not GEMINI_API_KEY:
+    GEMINI_API_KEY = st.text_input("Chave da API Gemini:", type="password")
 
-texto_entrada = st.text_area("Cole o texto com os links abaixo:", height=300, placeholder="Cole aqui o rascunho do boletim...")
+texto_entrada = st.text_area("Cole o rascunho do boletim com os links originais:", height=300)
 
-if st.button("Encurtar Links", type="primary", use_container_width=True):
-    if not XGD_API_KEY:
-        st.error("É necessário informar a chave da API do x.gd.")
+if st.button("Encurtar e Formatar Boletim", type="primary", use_container_width=True):
+    if not XGD_API_KEY or not GEMINI_API_KEY:
+        st.error("Configure as chaves XGD_API_KEY e GEMINI_API_KEY nos Secrets (ou nos campos acima).")
     elif not texto_entrada.strip():
-        st.warning("Cole algum texto antes de continuar.")
+        st.warning("Cole o texto do boletim antes de continuar.")
     else:
+        # Etapa 1: Encurtamento
         regex = r'https?://[^\s<>"{}|\\^`[\]]+'
         links = re.findall(regex, texto_entrada)
         links_unicos = list(dict.fromkeys(links))
 
-        if not links_unicos:
-            st.info("Nenhum link encontrado no texto.")
-        else:
+        texto_encurtado = texto_entrada
+        if links_unicos:
             barra = st.progress(0)
             status = st.empty()
             links_encurtados = {}
 
             for i, link in enumerate(links_unicos, 1):
-                status.text(f"Processando {i}/{len(links_unicos)}: {link[:65]}...")
+                status.text(f"Encurtando {i}/{len(links_unicos)}: {link[:60]}...")
                 dominio = extrair_dominio(link)
                 link_curto = encurtar_link_xgd(link, XGD_API_KEY)
                 links_encurtados[link] = f"{link_curto} ({dominio})"
                 barra.progress(i / len(links_unicos))
 
-            texto_modificado = texto_entrada
             for link_original, link_formatado in sorted(links_encurtados.items(), key=lambda x: len(x[0]), reverse=True):
-                texto_modificado = texto_modificado.replace(link_original, link_formatado)
+                texto_encurtado = texto_encurtado.replace(link_original, link_formatado)
 
-            status.success(f"Concluído! {len(links_unicos)} links processados.")
+            status.success(f"{len(links_unicos)} links encurtados!")
 
-            st.subheader("Resultado (clique no ícone no canto superior direito da caixa para copiar):")
-            st.code(texto_modificado, language="text")
+        # Etapa 2: Formatação via Gemini
+        with st.spinner("Formatando versões para WhatsApp e Substack..."):
+            try:
+                resultado = formatar_boletim(texto_encurtado, num_edicao, mes_ano, GEMINI_API_KEY)
+                partes = resultado.split("===SEPARADOR_SUBSTACK===")
+                versao_wpp = partes[0].strip()
+                versao_sub = partes[1].strip() if len(partes) > 1 else ""
 
-            st.download_button(
-                label="⬇️ Baixar como texto_modificado.txt",
-                data=texto_modificado,
-                file_name="texto_modificado.txt",
-                mime="text/plain",
-                use_container_width=True
-            )
+                aba_wpp, aba_sub, aba_bruto = st.tabs(["📱 WhatsApp", "💻 Substack", "🔗 Links Encurtados"])
+
+                with aba_wpp:
+                    st.caption("Clique no ícone de copiar no canto superior direito da caixa abaixo:")
+                    st.code(versao_wpp, language="text")
+
+                with aba_sub:
+                    st.info("Selecione o texto abaixo e copie (Ctrl+C / Cmd+C) para colar direto no editor visual do Substack.")
+                    st.markdown(versao_sub)
+                    with st.expander("Ver código Markdown bruto"):
+                        st.code(versao_sub, language="markdown")
+
+                with aba_bruto:
+                    st.code(texto_encurtado, language="text")
+
+            except Exception as e:
+                st.error(f"Erro ao formatar com o Gemini: {e}")
