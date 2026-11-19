@@ -192,11 +192,18 @@ TEXTO DO BOLETIM PARA FORMATAR:
 {texto_encurtado}
 """
 
-    response = client.models.generate_content(
-        model="gemini-3.8-flash",
-        contents=prompt,
-    )
-    return response.text
+for tentativa in range(3):
+        try:
+            response = client.models.generate_content(
+                model="gemini-3.8-flash",
+                contents=prompt,
+            )
+            return response.text
+        except Exception as e:
+            if "503" in str(e) and tentativa < 2:
+                time.sleep(4)  # Aguarda 4 segundos antes de tentar novamente
+                continue
+            raise e
 
 # === INTERFACE WEB ===
 st.title("🗞️ Editor do Boletim Contrapoder")
@@ -269,3 +276,12 @@ if st.button("Encurtar e Formatar Boletim", type="primary", use_container_width=
 
             except Exception as e:
                 st.error(f"Erro ao formatar com o Gemini: {e}")
+                st.warning("A formatação automática falhou, mas os links já foram encurtados abaixo (clique no ícone no canto superior direito para copiar):")
+                st.code(texto_encurtado, language="text")
+                st.download_button(
+                    label="⬇️ Baixar texto com links encurtados",
+                    data=texto_encurtado,
+                    file_name="texto_encurtado.txt",
+                    mime="text/plain",
+                    use_container_width=True
+                )
