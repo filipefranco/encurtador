@@ -2,14 +2,12 @@ import re
 import time
 import requests
 import streamlit as st
-from google import genai
-from google.genai import types
 from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
 
 st.set_page_config(page_title="Editor Contrapoder", page_icon="🗞️", layout="centered")
 
 XGD_API_KEY = st.secrets.get("XGD_API_KEY", "")
-GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
+GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "")
 
 # === 1. FUNÇÕES DE ENCURTAMENTO E DETECÇÃO ===
 def limpar_url_para_encurtar(url):
@@ -130,7 +128,7 @@ def encurtar_link_xgd(url, api_key, tentativas=3):
                 time.sleep(3)
     return url
 
-# === 2. FORMATADOR 100% PYTHON (INSTANTÂNEO, SEM DEPENDÊNCIA DE API) ===
+# === 2. FORMATADOR 100% PYTHON (PLANO B INSTANTÂNEO) ===
 def formatar_sem_ia(texto_encurtado, num_edicao, mes_ano):
     secoes_mapa = {
         "internacional": ("🌍", "Internacional"),
@@ -154,7 +152,6 @@ def formatar_sem_ia(texto_encurtado, num_edicao, mes_ano):
     itens_contrapoder = []
 
     linhas = [l.strip() for l in texto_encurtado.splitlines()]
-    secao_atual = ""
     i = 0
 
     while i < len(linhas):
@@ -166,7 +163,6 @@ def formatar_sem_ia(texto_encurtado, num_edicao, mes_ano):
         chave_secao = re.sub(r'[^a-zA-Záéíóúâêôãõç\s]', '', linha).strip().lower()
         if chave_secao in secoes_mapa:
             emoji, nome = secoes_mapa[chave_secao]
-            secao_atual = chave_secao
             wpp_linhas.append(f"{emoji} *{nome}*")
             wpp_linhas.append("")
             sub_linhas.append(f"### {emoji} **{nome}**")
@@ -174,7 +170,6 @@ def formatar_sem_ia(texto_encurtado, num_edicao, mes_ano):
             i += 1
             continue
 
-        # Se for manchete (não começa com http)
         if not linha.startswith("http"):
             manchete = re.sub(r'^[a-zA-Z0-9]{1,2}[\)\.\-]\s*', '', linha).strip()
             links_da_manchete = []
@@ -202,21 +197,16 @@ def formatar_sem_ia(texto_encurtado, num_edicao, mes_ano):
                 sub_linhas.append("")
                 for lk in links_da_manchete:
                     m = re.match(r'(https?://\S+)(.*)', lk)
-                    if m:
-                        sub_linhas.append(f"[{m.group(1)}]({m.group(1)}){m.group(2)}")
-                    else:
-                        sub_linhas.append(lk)
+                    sub_linhas.append(f"[{m.group(1)}]({m.group(1)}){m.group(2)}" if m else lk)
                 sub_linhas.append("")
 
             i = j
         else:
-            # Link solto
             wpp_linhas.append(linha)
             m = re.match(r'(https?://\S+)(.*)', linha)
             sub_linhas.append(f"[{m.group(1)}]({m.group(1)}){m.group(2)}" if m else linha)
             i += 1
 
-    # Bloco Contrapoder
     if itens_contrapoder:
         wpp_linhas.extend(["---", "🚫 CONTRAPODER:", "Leia nossos artigos de destaque diretamente no site:", ""])
         sub_linhas.extend(["---", "### 🚫 **CONTRAPODER:**", "Leia nossos artigos de destaque diretamente no site:", ""])
@@ -233,7 +223,6 @@ def formatar_sem_ia(texto_encurtado, num_edicao, mes_ano):
                 sub_linhas.append(f"[{m.group(1)}]({m.group(1)}){m.group(2)}" if m else lk)
             sub_linhas.append("")
 
-    # Rodapés
     wpp_linhas.extend([
         "💰 Apoie o Contrapoder:",
         "pix para 11951771614 (celular editor)"
@@ -245,25 +234,14 @@ def formatar_sem_ia(texto_encurtado, num_edicao, mes_ano):
 
     return "\n".join(wpp_linhas).strip(), "\n".join(sub_linhas).strip()
 
-# === 3. FORMATAÇÃO COM GEMINI (FALLBACK AUTOMÁTICO DE MODELOS) ===
-def listar_modelos_gemini(api_key):
-    preferencia = ["gemini-3.8-flash", "gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash"]
-    try:
-        client = genai.Client(api_key=api_key, http_options={"timeout": 15000})
-        disponiveis = [
-            m.name.replace("models/", "")
-            for m in client.models.list()
-            if "generateContent" in (m.supported_actions or []) and "gemini" in m.name
-        ]
-        ordenados = [m for m in preferencia if m in disponiveis]
-        extras = [m for m in disponiveis if m not in ordenados and ("flash" in m or "lite" in m)]
-        return (ordenados + extras)[:4] or ["gemini-3.8-flash"]
-    except Exception:
-        return ["gemini-3.8-flash"]
-
-def formatar_com_gemini(texto_encurtado, num_edicao, mes_ano, api_key):
-    client = genai.Client(api_key=api_key, http_options={"timeout": 60000})
-    modelos = listar_modelos_gemini(api_key)
+# === 3. FORMATAÇÃO COM GROQ (PRINCIPAL) ===
+def formatar_com_groq(texto_encurtado, num_edicao, mes_ano, api_key):
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    modelos = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
 
     prompt = f"""Você é o editor técnico do "Boletim Semanal do Contrapoder".
 Receba o texto abaixo (já com os links encurtados) e devolva EXATAMENTE duas versões separadas pela marcação "===SEPARADOR_SUBSTACK===". Não escreva nenhuma introdução ou comentário fora das versões.
@@ -324,15 +302,18 @@ TEXTO DO BOLETIM PARA FORMATAR:
     ultimo_erro = None
     for modelo in modelos:
         try:
-            response = client.models.generate_content(
-                model=modelo,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    thinking_config=types.ThinkingConfig(thinking_budget=0)
-                )
-            )
-            partes = response.text.split("===SEPARADOR_SUBSTACK===")
-            return partes[0].strip(), (partes[1].strip() if len(partes) > 1 else ""), modelo
+            payload = {
+                "model": modelo,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.2
+            }
+            resp = requests.post(url, headers=headers, json=payload, timeout=60)
+            if resp.status_code == 200:
+                conteudo = resp.json()["choices"][0]["message"]["content"]
+                partes = conteudo.split("===SEPARADOR_SUBSTACK===")
+                return partes[0].strip(), (partes[1].strip() if len(partes) > 1 else ""), modelo
+            else:
+                ultimo_erro = Exception(f"HTTP {resp.status_code}: {resp.text[:200]}")
         except Exception as e:
             ultimo_erro = e
             continue
@@ -349,12 +330,12 @@ with col1:
 with col2:
     mes_ano = st.text_input("Mês e Ano:", value="Novembro de 2026")
 
-usar_ia = st.toggle("Usar IA (Gemini) para escolher emojis temáticos", value=True, help="Se desligado — ou se o Gemini estiver fora do ar — o app formata instantaneamente em Python.")
+usar_ia = st.toggle("Usar IA (Groq) para escolher emojis temáticos", value=True, help="Se desligado — ou se a Groq estiver fora do ar — o app formata instantaneamente em Python.")
 
 if not XGD_API_KEY:
     XGD_API_KEY = st.text_input("Chave da API x.gd:", type="password")
-if usar_ia and not GEMINI_API_KEY:
-    GEMINI_API_KEY = st.text_input("Chave da API Gemini:", type="password")
+if usar_ia and not GROQ_API_KEY:
+    GROQ_API_KEY = st.text_input("Chave da API Groq:", type="password")
 
 texto_entrada = st.text_area("Cole o rascunho do boletim com os links originais:", height=280)
 
@@ -388,19 +369,18 @@ if st.button("Encurtar e Formatar Boletim", type="primary", use_container_width=
 
         st.session_state["texto_encurtado"] = texto_encurtado
 
-        if usar_ia and GEMINI_API_KEY:
-            with st.spinner("Formatando com Gemini (com troca automática de modelo)..."):
+        if usar_ia and GROQ_API_KEY:
+            with st.spinner("Formatando com Groq..."):
                 try:
-                    wpp, sub, modelo_usado = formatar_com_gemini(texto_encurtado, num_edicao, mes_ano, GEMINI_API_KEY)
-                    st.session_state["resultado"] = (wpp, sub, f"Formatado com IA ({modelo_usado})")
+                    wpp, sub, modelo_usado = formatar_com_groq(texto_encurtado, num_edicao, mes_ano, GROQ_API_KEY)
+                    st.session_state["resultado"] = (wpp, sub, f"Formatado com Groq ({modelo_usado})")
                 except Exception as e:
                     wpp, sub = formatar_sem_ia(texto_encurtado, num_edicao, mes_ano)
-                    st.session_state["resultado"] = (wpp, sub, f"Gemini indisponível ({type(e).__name__}) — formatado automaticamente em Python (sem IA)!")
+                    st.session_state["resultado"] = (wpp, sub, f"Groq indisponível ({e}) — formatado automaticamente em Python!")
         else:
             wpp, sub = formatar_sem_ia(texto_encurtado, num_edicao, mes_ano)
             st.session_state["resultado"] = (wpp, sub, "Formatado instantaneamente em Python (sem IA).")
 
-# Exibe resultados salvos na sessão
 if "resultado" in st.session_state:
     versao_wpp, versao_sub, msg_status = st.session_state["resultado"]
     st.info(msg_status)
