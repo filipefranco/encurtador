@@ -248,7 +248,7 @@ Receba o texto abaixo (já com os links encurtados) e devolva EXATAMENTE duas ve
 
 REGRAS GERAIS:
 1. Remova as letras de enumeração (a), b), c)...) das manchetes.
-2. Adicione emojis temáticos adequados antes de cada manchete. Em protestos, greves ou marchas, use ✊ (seguido da bandeira do país, quando aplicável).
+2. Adicione emojis temáticos adequados antes de cada manchete (substituindo eventuais 📌 genéricos). Em protestos, greves ou marchas, use ✊ (seguido da bandeira do país, quando aplicável).
 3. Na seção Nacional, NÃO coloque a bandeira do Brasil (🇧🇷) nas chamadas individuais.
 4. Mantenha os links exatamente como estão no texto recebido, incluindo as atribuições entre parênteses.
 5. Qualquer texto do site contrapoder.net ("(contrapoder)") deve ser REMOVIDO da seção "Leituras" e colocado EXCLUSIVAMENTE no bloco final "🚫 CONTRAPODER:".
@@ -330,42 +330,53 @@ with col1:
 with col2:
     mes_ano = st.text_input("Mês e Ano:", value="Novembro de 2026")
 
-usar_ia = st.toggle("Usar IA (Groq) para escolher emojis temáticos", value=True, help="Se desligado — ou se a Groq estiver fora do ar — o app formata instantaneamente em Python.")
+usar_ia = st.toggle(
+    "Usar IA (Groq) para escolher emojis temáticos",
+    value=True,
+    help="Se desligado — ou se a Groq estiver fora do ar — o app formata instantaneamente em Python."
+)
+pular_encurtamento = st.toggle(
+    "Links já estão encurtados (pular etapa do x.gd)",
+    value=False,
+    help="Ative se você já tem o texto com links x.gd e quer apenas que a Groq formate e coloque os emojis."
+)
 
-if not XGD_API_KEY:
+if not pular_encurtamento and not XGD_API_KEY:
     XGD_API_KEY = st.text_input("Chave da API x.gd:", type="password")
 if usar_ia and not GROQ_API_KEY:
     GROQ_API_KEY = st.text_input("Chave da API Groq:", type="password")
 
-texto_entrada = st.text_area("Cole o rascunho do boletim com os links originais:", height=280)
+texto_entrada = st.text_area("Cole o rascunho do boletim:", height=280)
 
 if st.button("Encurtar e Formatar Boletim", type="primary", use_container_width=True):
-    if not XGD_API_KEY:
+    if not pular_encurtamento and not XGD_API_KEY:
         st.error("Configure a chave XGD_API_KEY nos Secrets (ou no campo acima).")
     elif not texto_entrada.strip():
         st.warning("Cole o texto do boletim antes de continuar.")
     else:
-        regex = r'https?://[^\s<>"{}|\\^`[\]]+'
-        links = re.findall(regex, texto_entrada)
-        links_unicos = list(dict.fromkeys(links))
-
         texto_encurtado = texto_entrada
-        if links_unicos:
-            barra = st.progress(0)
-            status = st.empty()
-            links_encurtados = {}
 
-            for i, link in enumerate(links_unicos, 1):
-                status.text(f"Encurtando {i}/{len(links_unicos)}: {link[:60]}...")
-                dominio = extrair_dominio(link)
-                link_curto = encurtar_link_xgd(link, XGD_API_KEY)
-                links_encurtados[link] = f"{link_curto} ({dominio})"
-                barra.progress(i / len(links_unicos))
+        if not pular_encurtamento:
+            regex = r'https?://[^\s<>"{}|\\^`[\]]+'
+            links = re.findall(regex, texto_entrada)
+            links_unicos = [l for l in dict.fromkeys(links) if "x.gd/" not in l]
 
-            for link_original, link_formatado in sorted(links_encurtados.items(), key=lambda x: len(x[0]), reverse=True):
-                texto_encurtado = texto_encurtado.replace(link_original, link_formatado)
+            if links_unicos:
+                barra = st.progress(0)
+                status = st.empty()
+                links_encurtados = {}
 
-            status.success(f"{len(links_unicos)} links encurtados!")
+                for i, link in enumerate(links_unicos, 1):
+                    status.text(f"Encurtando {i}/{len(links_unicos)}: {link[:60]}...")
+                    dominio = extrair_dominio(link)
+                    link_curto = encurtar_link_xgd(link, XGD_API_KEY)
+                    links_encurtados[link] = f"{link_curto} ({dominio})"
+                    barra.progress(i / len(links_unicos))
+
+                for link_original, link_formatado in sorted(links_encurtados.items(), key=lambda x: len(x[0]), reverse=True):
+                    texto_encurtado = texto_encurtado.replace(link_original, link_formatado)
+
+                status.success(f"{len(links_unicos)} links encurtados!")
 
         st.session_state["texto_encurtado"] = texto_encurtado
 
