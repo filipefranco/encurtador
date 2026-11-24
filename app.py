@@ -235,13 +235,44 @@ def formatar_sem_ia(texto_encurtado, num_edicao, mes_ano):
     return "\n".join(wpp_linhas).strip(), "\n".join(sub_linhas).strip()
 
 # === 3. FORMATAÇÃO COM GROQ (PRINCIPAL) ===
+def listar_modelos_groq(api_key):
+    url = "https://api.groq.com/openai/v1/models"
+    headers = {"Authorization": f"Bearer {api_key}"}
+    ignorar = ("whisper", "guard", "tts", "playai", "orpheus", "safeguard", "compound")
+
+    try:
+        resp = requests.get(url, headers=headers, timeout=15)
+        if resp.status_code == 200:
+            dados = resp.json().get("data", [])
+            modelos = [
+                m["id"] for m in dados
+                if m.get("id") and not any(x in m["id"].lower() for x in ignorar)
+            ]
+            # Prioriza modelos maiores/mais recentes de texto
+            def prioridade(nome):
+                n = nome.lower()
+                if "llama-4" in n or "70b" in n or "120b" in n:
+                    return 0
+                if "qwen" in n or "llama" in n or "gpt" in n:
+                    return 1
+                return 2
+
+            modelos.sort(key=prioridade)
+            if modelos:
+                return modelos[:4]
+    except Exception:
+        pass
+    return []
+
 def formatar_com_groq(texto_encurtado, num_edicao, mes_ano, api_key):
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
-    modelos = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+    modelos = listar_modelos_groq(api_key)
+    if not modelos:
+        raise Exception("Nenhum modelo de texto disponível na sua conta Groq.")
 
     prompt = f"""Você é o editor técnico do "Boletim Semanal do Contrapoder".
 Receba o texto abaixo (já com os links encurtados) e devolva EXATAMENTE duas versões separadas pela marcação "===SEPARADOR_SUBSTACK===". Não escreva nenhuma introdução ou comentário fora das versões.
@@ -313,7 +344,7 @@ TEXTO DO BOLETIM PARA FORMATAR:
                 partes = conteudo.split("===SEPARADOR_SUBSTACK===")
                 return partes[0].strip(), (partes[1].strip() if len(partes) > 1 else ""), modelo
             else:
-                ultimo_erro = Exception(f"HTTP {resp.status_code}: {resp.text[:200]}")
+                ultimo_erro = Exception(f"{modelo} -> HTTP {resp.status_code}: {resp.text[:200]}")
         except Exception as e:
             ultimo_erro = e
             continue
